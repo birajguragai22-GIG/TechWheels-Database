@@ -66,9 +66,7 @@ init_db()
 # --- GUI Layout ---
 st.set_page_config(page_title="TechWheels System", layout="wide")
 st.title("🚗 TechWheels Database System")
-st.sidebar.header("Operations Menu")
-menu = st.sidebar.radio("Navigate", ["Dashboard & Reports", "Register Member", "Add/Update Vehicle", "Retire Vehicle"])
-
+st.sidebar.header("Operations Menu")menu = st.sidebar.radio("Navigate", ["Dashboard & Reports", "Register Member", "Manage Members", "Add/Update Vehicle", "Retire Vehicle"])
 # --- 1. READ / REPORTS ---
 if menu == "Dashboard & Reports":
     st.header("System Dashboard")
@@ -109,6 +107,41 @@ elif menu == "Register Member":
                 st.success(f"Member {name} registered successfully!")
             except sqlite3.IntegrityError:
                 st.error("Error: CUNY ID already exists.")
+
+                # --- 2.5. UPDATE / DELETE MEMBERS ---
+elif menu == "Manage Members":
+    st.header("Manage Registered Members")
+    
+    # READ: Show the current member list
+    st.subheader("Current Member Directory")
+    df_members = pd.read_sql_query("SELECT CUNY_ID, Full_Name, Account_Status FROM MEMBER", conn)
+    st.dataframe(df_members, use_container_width=True)
+    
+    tab1, tab2 = st.tabs(["Update Account Status", "Remove Member"])
+    
+    # UPDATE
+    with tab1:
+        st.write("Use this tool to suspend members with overdue vehicles.")
+        m_id_update = st.number_input("Enter CUNY ID to Update", min_value=10000000, max_value=99999999, step=1)
+        new_status = st.selectbox("New Account Status", ["Active", "Suspended", "Inactive"])
+        
+        if st.button("Update Member Status"):
+            c.execute("UPDATE MEMBER SET Account_Status = ? WHERE CUNY_ID = ?", (new_status, m_id_update))
+            conn.commit()
+            st.success(f"CUNY ID {m_id_update} status changed to {new_status}!")
+            
+    # DELETE
+    with tab2:
+        st.write("⚠️ WARNING: Removing a member cannot be undone.")
+        m_id_delete = st.number_input("Enter CUNY ID to Remove", min_value=10000000, max_value=99999999, step=1)
+        
+        if st.button("Permanently Delete Member"):
+            # First, we need to delete their reservations to avoid foreign key conflicts
+            c.execute("DELETE FROM RESERVATION WHERE CUNY_ID = ?", (m_id_delete,))
+            # Then delete the member
+            c.execute("DELETE FROM MEMBER WHERE CUNY_ID = ?", (m_id_delete,))
+            conn.commit()
+            st.warning(f"Member {m_id_delete} and all their trip history have been deleted.")
 
 # --- 3. CREATE / UPDATE ---
 elif menu == "Add/Update Vehicle":
