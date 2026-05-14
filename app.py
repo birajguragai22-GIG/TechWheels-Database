@@ -66,7 +66,8 @@ init_db()
 # --- GUI Layout ---
 st.set_page_config(page_title="TechWheels System", layout="wide")
 st.title("🚗 TechWheels Database System")
-st.sidebar.header("Operations Menu")menu = st.sidebar.radio("Navigate", ["Dashboard & Reports", "Register Member", "Manage Members", "Add/Update Vehicle", "Retire Vehicle"])
+st.sidebar.header("Operations Menu")
+menu = st.sidebar.radio("Navigate", ["Dashboard & Reports", "Register Member", "Manage Members", "Add/Update Vehicle", "Retire Vehicle"])
 # --- 1. READ / REPORTS ---
 if menu == "Dashboard & Reports":
     st.header("System Dashboard")
