@@ -67,7 +67,7 @@ init_db()
 st.set_page_config(page_title="TechWheels System", layout="wide")
 st.title("🚗 TechWheels Database System")
 st.sidebar.header("Operations Menu")
-menu = st.sidebar.radio("Navigate", ["Dashboard & Reports", "Register Member", "Manage Members", "Add/Update Vehicle", "Process Return", "Retire Vehicle"])
+menu = st.sidebar.radio("Navigate", ["Dashboard & Reports", "Register Member", "Manage Members", "Add/Update Vehicle", "Manage Trips", "Retire Vehicle"])
 # --- 1. READ / REPORTS ---
 if menu == "Dashboard & Reports":
     st.header("System Dashboard")
@@ -173,43 +173,96 @@ elif menu == "Add/Update Vehicle":
             c.execute("UPDATE VEHICLE SET Status = ? WHERE Vehicle_ID = ?", (new_stat, v_update))
             conn.commit()
             st.success("Status Updated! Check the Dashboard.")
-            # --- 3.5. PROCESS RETURN (Update Reservations) ---
-elif menu == "Process Return":
-    st.header("Process a Vehicle Return")
-    st.write("When a vehicle is returned, it will be removed from the Overdue list and become Available again.")
+           # --- 3. MANAGE TRIPS (Unified Check-Out & Return) ---
+elif menu == "Manage Trips":
+    st.header("🚦 Trip Kiosk")
+    st.write("Manage all vehicle check-outs and returns from this central hub.")
     
-    # 1. Read: Show all active trips (vehicles currently out)
-    query = '''
-        SELECT r.Reservation_ID, m.Full_Name, v.Vehicle_ID, v.Make, r.Exp_Return
-        FROM RESERVATION r
-        JOIN MEMBER m ON r.CUNY_ID = m.CUNY_ID
-        JOIN VEHICLE v ON r.Vehicle_ID = v.Vehicle_ID
-        WHERE r.Act_Return IS NULL
-    '''
-    df_active = pd.read_sql_query(query, conn)
+    # We use Streamlit Tabs to keep both actions on the exact same page
+    tab_out, tab_in = st.tabs(["Check-Out a Vehicle", "Process a Return"])
     
-    if df_active.empty:
-        st.success("All vehicles have been returned! There are no active trips.")
-    else:
-        st.dataframe(df_active, use_container_width=True)
+    # === TAB 1: CHECK-OUT ===
+    with tab_out:
+        st.subheader("Start a New Trip")
         
-        # 2. Update: The form to close the trip
-        res_id = st.number_input("Enter the Reservation ID to close out", min_value=1, step=1)
-        hub_return = st.number_input("Which Hub is it being parked at? (1-4)", min_value=1, max_value=4, step=1)
+        # 1. Fetch only Active Members
+        df_active_members = pd.read_sql_query("SELECT CUNY_ID, Full_Name FROM MEMBER WHERE Account_Status = 'Active'", conn)
         
-        if st.button("Complete Trip & Return Vehicle"):
-            # Update the Reservation (Stamps the current time, removing it from overdue)
-            c.execute("UPDATE RESERVATION SET Act_Return = CURRENT_TIMESTAMP WHERE Reservation_ID = ?", (res_id,))
+        if df_active_members.empty:
+            st.error("No active members available.")
+        else:
+            member_options = df_active_members['CUNY_ID'].astype(str) + " - " + df_active_members['Full_Name']
+            selected_member = st.selectbox("1. Select Member", member_options, key="checkout_member")
+            cuny_id = int(selected_member.split(" - ")[0])
             
-            # Find which vehicle this was, and make it Available at the new hub
-            c.execute("SELECT Vehicle_ID FROM RESERVATION WHERE Reservation_ID = ?", (res_id,))
-            veh_row = c.fetchone()
-            if veh_row:
-                veh_id = veh_row[0]
-                c.execute("UPDATE VEHICLE SET Status = 'Available', Parked_Hub_ID = ? WHERE Vehicle_ID = ?", (hub_return, veh_id))
+            # 2. ENFORCE THE RULE: Check how many active vehicles this member currently has
+            c.execute("SELECT COUNT(*) FROM RESERVATION WHERE CUNY_ID = ? AND Act_Return IS NULL", (cuny_id,))
+            active_trips = c.fetchone()[0]
             
-            conn.commit()
-            st.success(f"Trip closed! Vehicle returned to Hub {hub_return}. Check the Dashboard to see the updated reports.")
+            if active_trips >= 2:
+                st.error(f"🛑 Limit Reached: This member currently has {active_trips} active vehicles. They cannot reserve another until they return one.")
+            else:
+                st.success(f"✅ Member eligible. Current active trips: {active_trips} / 2.")
+                
+                # 3. Only show the rest of the form if they pass the limit check
+                df_avail_cars = pd.read_sql_query("SELECT Vehicle_ID, Make, Model, Parked_Hub_ID FROM VEHICLE WHERE Status = 'Available'", conn)
+                if df_avail_cars.empty:
+                    st.warning("No vehicles are currently available.")
+                else:
+                    with st.form("checkout_form"):
+                        car_options = df_avail_cars['Vehicle_ID'].astype(str) + " - " + df_avail_cars['Make'] + " " + df_avail_cars['Model'] + " (Hub " + df_avail_cars['Parked_Hub_ID'].astype(str) + ")"
+                        selected_car = st.selectbox("2. Select Vehicle", car_options)
+                        
+                        rental_hours = st.number_input("3. Rental Duration (Hours)", min_value=1, max_value=72, value=2, step=1)
+                        
+                        if st.form_submit_button("Start Trip"):
+                            veh_id = int(selected_car.split(" - ")[0])
+                            
+                            # Calculates the exact due time based on right now
+                            exp_return_time = (datetime.now() + timedelta(hours=rental_hours)).strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            c.execute("INSERT INTO RESERVATION (CUNY_ID, Vehicle_ID, Exp_Return, Act_Return) VALUES (?, ?, ?, NULL)", (cuny_id, veh_id, exp_return_time))
+                            c.execute("UPDATE VEHICLE SET Status = 'Checked Out', Parked_Hub_ID = NULL WHERE Vehicle_ID = ?", (veh_id,))
+                            conn.commit()
+                            
+                            st.success(f"Trip Started! Vehicle {veh_id} is due back exactly at {exp_return_time}.")
+
+    # === TAB 2: RETURN ===
+    with tab_in:
+        st.subheader("Process a Return")
+        st.write("Stamps the current time and clears the vehicle from the Overdue list if applicable.")
+        
+        # Show all active trips
+        query = '''
+            SELECT r.Reservation_ID, m.Full_Name, v.Vehicle_ID, v.Make, r.Exp_Return
+            FROM RESERVATION r
+            JOIN MEMBER m ON r.CUNY_ID = m.CUNY_ID
+            JOIN VEHICLE v ON r.Vehicle_ID = v.Vehicle_ID
+            WHERE r.Act_Return IS NULL
+        '''
+        df_active = pd.read_sql_query(query, conn)
+        
+        if df_active.empty:
+            st.info("All vehicles are currently at their hubs. No active trips to return.")
+        else:
+            st.dataframe(df_active, use_container_width=True)
+            
+            with st.form("return_form"):
+                res_id = st.number_input("Enter Reservation ID to Return", min_value=1, step=1)
+                hub_return = st.number_input("Parked at Hub # (1-4)", min_value=1, max_value=4, step=1)
+                
+                if st.form_submit_button("Confirm Return"):
+                    # Stamping CURRENT_TIMESTAMP handles the time processing automatically
+                    c.execute("UPDATE RESERVATION SET Act_Return = CURRENT_TIMESTAMP WHERE Reservation_ID = ?", (res_id,))
+                    
+                    c.execute("SELECT Vehicle_ID FROM RESERVATION WHERE Reservation_ID = ?", (res_id,))
+                    veh_row = c.fetchone()
+                    if veh_row:
+                        veh_id = veh_row[0]
+                        c.execute("UPDATE VEHICLE SET Status = 'Available', Parked_Hub_ID = ? WHERE Vehicle_ID = ?", (hub_return, veh_id))
+                    
+                    conn.commit()
+                    st.success(f"Return Processed! The live time was stamped and Vehicle {veh_id} is back in the Available pool.")
 
 # --- 4. DELETE ---
 elif menu == "Retire Vehicle":
