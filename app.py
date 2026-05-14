@@ -252,18 +252,25 @@ elif menu == "Manage Trips":
                 hub_return = st.number_input("Parked at Hub # (1-4)", min_value=1, max_value=4, step=1)
                 
                 if st.form_submit_button("Confirm Return"):
-                    # Stamping CURRENT_TIMESTAMP handles the time processing automatically
-                    c.execute("UPDATE RESERVATION SET Act_Return = CURRENT_TIMESTAMP WHERE Reservation_ID = ?", (res_id,))
-                    
+                    # 1. First, check if the reservation actually exists and get the Vehicle ID
                     c.execute("SELECT Vehicle_ID FROM RESERVATION WHERE Reservation_ID = ?", (res_id,))
                     veh_row = c.fetchone()
-                    if veh_row:
-                        veh_id = veh_row[0]
-                        c.execute("UPDATE VEHICLE SET Status = 'Available', Parked_Hub_ID = ? WHERE Vehicle_ID = ?", (hub_return, veh_id))
                     
-                    conn.commit()
-                    st.success(f"Return Processed! The live time was stamped and Vehicle {veh_id} is back in the Available pool.")
-
+                    if veh_row:
+                        # The reservation exists! Let's process it.
+                        veh_id = veh_row[0]
+                        
+                        # Stamp the return time
+                        c.execute("UPDATE RESERVATION SET Act_Return = CURRENT_TIMESTAMP WHERE Reservation_ID = ?", (res_id,))
+                        
+                        # Make the vehicle available at the new hub
+                        c.execute("UPDATE VEHICLE SET Status = 'Available', Parked_Hub_ID = ? WHERE Vehicle_ID = ?", (hub_return, veh_id))
+                        
+                        conn.commit()
+                        st.success(f"Return Processed! The live time was stamped and Vehicle {veh_id} is back in the Available pool.")
+                    else:
+                        # The reservation doesn't exist. Show a friendly error instead of crashing.
+                        st.error(f"Error: Reservation ID {res_id} not found. Please check the active trips table and try again.")
 # --- 4. DELETE ---
 elif menu == "Retire Vehicle":
     st.header("Retire Vehicle (Delete)")
