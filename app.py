@@ -67,7 +67,7 @@ init_db()
 st.set_page_config(page_title="TechWheels System", layout="wide")
 st.title("🚗 TechWheels Database System")
 st.sidebar.header("Operations Menu")
-menu = st.sidebar.radio("Navigate", ["Dashboard & Reports", "Register Member", "Manage Members", "Add/Update Vehicle", "Retire Vehicle"])
+menu = st.sidebar.radio("Navigate", ["Dashboard & Reports", "Register Member", "Manage Members", "Add/Update Vehicle", "Process Return", "Retire Vehicle"])
 # --- 1. READ / REPORTS ---
 if menu == "Dashboard & Reports":
     st.header("System Dashboard")
@@ -173,6 +173,43 @@ elif menu == "Add/Update Vehicle":
             c.execute("UPDATE VEHICLE SET Status = ? WHERE Vehicle_ID = ?", (new_stat, v_update))
             conn.commit()
             st.success("Status Updated! Check the Dashboard.")
+            # --- 3.5. PROCESS RETURN (Update Reservations) ---
+elif menu == "Process Return":
+    st.header("Process a Vehicle Return")
+    st.write("When a vehicle is returned, it will be removed from the Overdue list and become Available again.")
+    
+    # 1. Read: Show all active trips (vehicles currently out)
+    query = '''
+        SELECT r.Reservation_ID, m.Full_Name, v.Vehicle_ID, v.Make, r.Exp_Return
+        FROM RESERVATION r
+        JOIN MEMBER m ON r.CUNY_ID = m.CUNY_ID
+        JOIN VEHICLE v ON r.Vehicle_ID = v.Vehicle_ID
+        WHERE r.Act_Return IS NULL
+    '''
+    df_active = pd.read_sql_query(query, conn)
+    
+    if df_active.empty:
+        st.success("All vehicles have been returned! There are no active trips.")
+    else:
+        st.dataframe(df_active, use_container_width=True)
+        
+        # 2. Update: The form to close the trip
+        res_id = st.number_input("Enter the Reservation ID to close out", min_value=1, step=1)
+        hub_return = st.number_input("Which Hub is it being parked at? (1-4)", min_value=1, max_value=4, step=1)
+        
+        if st.button("Complete Trip & Return Vehicle"):
+            # Update the Reservation (Stamps the current time, removing it from overdue)
+            c.execute("UPDATE RESERVATION SET Act_Return = CURRENT_TIMESTAMP WHERE Reservation_ID = ?", (res_id,))
+            
+            # Find which vehicle this was, and make it Available at the new hub
+            c.execute("SELECT Vehicle_ID FROM RESERVATION WHERE Reservation_ID = ?", (res_id,))
+            veh_row = c.fetchone()
+            if veh_row:
+                veh_id = veh_row[0]
+                c.execute("UPDATE VEHICLE SET Status = 'Available', Parked_Hub_ID = ? WHERE Vehicle_ID = ?", (hub_return, veh_id))
+            
+            conn.commit()
+            st.success(f"Trip closed! Vehicle returned to Hub {hub_return}. Check the Dashboard to see the updated reports.")
 
 # --- 4. DELETE ---
 elif menu == "Retire Vehicle":
